@@ -5,7 +5,6 @@ import mindspore.ops as ops
 
 
 from detectron2.utils.registry import Registry
-from detectron2.layers import Conv2d
 
 SPARSE_INST_ENCODER_REGISTRY = Registry("SPARSE_INST_ENCODER")
 SPARSE_INST_ENCODER_REGISTRY.__doc__ = "registry for SparseInst decoder"

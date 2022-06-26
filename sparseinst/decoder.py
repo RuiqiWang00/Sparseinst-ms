@@ -4,7 +4,6 @@ import mindspore.nn as nn
 import mindspore.ops as ops
 
 from detectron2.utils.registry import Registry
-from detectron2.layers import Conv2d
 
 SPARSE_INST_DECODER_REGISTRY = Registry("SPARSE_INST_DECODER")
 SPARSE_INST_DECODER_REGISTRY.__doc__ = "registry for SparseInst decoder"
@@ -176,7 +175,7 @@ class GroupInstanceBranch(nn.Cell):
 		normalizer = ops.clip_by_value(iam_prob.sum(-1),clip_value_min=Tensor(1e-6,mindspore.float32))
 		inst_features = inst_features / normalizer[:, :, None]
 
-		inst_features=ops.Reshape()(ops.Transpose()(ops.Reshape()(inst_features,(B,4,N//4,-1)),(0,2,1,3)),(B,N//4,-1))
+		inst_features=ops.reshape(ops.Transpose()(ops.reshape(inst_features,(B,4,N//4,-1)),(0,2,1,3)),(B,N//4,-1))
 		inst_features=ops.ReLU()(self.fc(inst_features))
 		# predict classification & segmentation kernel & objectness
 		pred_logits = self.cls_score(inst_features)
