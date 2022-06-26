@@ -1,7 +1,7 @@
 import mindspore
+from mindspore import Tensor
 import mindspore.nn as nn
-import mindspore.nn.ops as ops
-
+import mindspore.ops as ops
 
 from detectron2.utils.registry import Registry
 from detectron2.layers import Conv2d
@@ -20,7 +20,7 @@ def _make_stack_3x3_convs(num_convs, in_channels, out_channels):
 	return nn.SequentialCell(*convs)
 
 
-class MaskBranch(nn.Module):
+class MaskBranch(nn.Cell):
 
 	def __init__(self, cfg, in_channels):
 		super().__init__()
@@ -29,15 +29,171 @@ class MaskBranch(nn.Module):
 		kernel_dim = cfg.MODEL.SPARSE_INST.DECODER.KERNEL_DIM
 		self.mask_convs = _make_stack_3x3_convs(num_convs, in_channels, dim)
 		self.projection = nn.Conv2d(dim, kernel_dim, kernel_size=1,has_bias=True)
-		self._init_weights()
 
-	def _init_weights(self):
-		for m in self.mask_convs.modules():
-			if isinstance(m, nn.Conv2d):
-				c2_msra_fill(m)
-		c2_msra_fill(self.projection)
-
-	def forward(self, features):
+	def construct(self, features):
  		# mask features (x4 convs)
 		features = self.mask_convs(features)
 		return self.projection(features)
+
+
+
+class InstanceBranch(nn.Cell):
+
+	def __init__(self, cfg, in_channels):
+		super().__init__()
+		# norm = cfg.MODEL.SPARSE_INST.DECODER.NORM
+		dim = cfg.MODEL.SPARSE_INST.DECODER.INST.DIM
+		num_convs = cfg.MODEL.SPARSE_INST.DECODER.INST.CONVS
+		num_masks = cfg.MODEL.SPARSE_INST.DECODER.NUM_MASKS
+		kernel_dim = cfg.MODEL.SPARSE_INST.DECODER.KERNEL_DIM
+		self.num_classes = cfg.MODEL.SPARSE_INST.DECODER.NUM_CLASSES
+
+		self.inst_convs = _make_stack_3x3_convs(num_convs, in_channels, dim)
+		# iam prediction, a simple conv
+		self.iam_conv = nn.Conv2d(dim, num_masks, 3, has_bias=True)
+
+		 # outputs
+		self.cls_score = nn.Dense(dim, self.num_classes)
+		self.mask_kernel = nn.Dense(dim, kernel_dim)
+		self.objectness = nn.Dense(dim, 1)
+
+
+	def construct(self, features):
+		# instance features (x4 convs)
+		features = self.inst_convs(features)
+		# predict instance activation maps
+		iam = self.iam_conv(features)
+		iam_prob = ops.Sigmoid()(iam)
+
+		B, N = iam_prob.shape[:2]
+		C = features.shape[1]
+		# BxNxHxW -> BxNx(HW)
+		iam_prob = iam_prob.view((B, N, -1))
+		# aggregate features: BxCxHxW -> Bx(HW)xC
+		inst_features=ops.BatchMatMul(transpose_b=True)(iam_prob,features.view((B, C, -1)))
+		normalizer = ops.clip_by_value(iam_prob.sum(-1),clip_value_min=Tensor(1e-6,mindspore.float32))
+		inst_features = inst_features / normalizer[:, :, None]
+		# predict classification & segmentation kernel & objectness
+		pred_logits = self.cls_score(inst_features)
+		pred_kernel = self.mask_kernel(inst_features)
+		pred_scores = self.objectness(inst_features)
+		return pred_logits, pred_kernel, pred_scores, iam
+
+
+@SPARSE_INST_DECODER_REGISTRY.register()
+class BaseIAMDecoder(nn.Cell):
+
+	def __init__(self, cfg):
+		super().__init__()
+		# add 2 for coordinates
+		in_channels = cfg.MODEL.SPARSE_INST.ENCODER.NUM_CHANNELS + 2
+
+		self.scale_factor = cfg.MODEL.SPARSE_INST.DECODER.SCALE_FACTOR
+		self.output_iam = cfg.MODEL.SPARSE_INST.DECODER.OUTPUT_IAM
+
+		self.resize=nn.ResizeBilinear()
+		
+		self.inst_branch = InstanceBranch(cfg, in_channels)
+		self.mask_branch = MaskBranch(cfg, in_channels)
+
+
+	def compute_coordinates(self, x):
+		h, w = x.shape[2], x.shape[3]
+		start=Tensor(-1,mindspore.float32)
+		stop=Tensor(1,mindspore.float32)
+		y_loc = ops.LinSpace()(start,stop, h)
+		x_loc = ops.LinSpace()(start,stop, w)
+		y_loc, x_loc = ops.Meshgrid()((y_loc, x_loc))
+		y_loc=ops.BroadcastTo((x.shape[0],1,-1,-1))(y_loc)
+		x_loc=ops.BroadcastTo((x.shape[0],1,-1,-1))(x_loc)
+		locations=ops.Concat(1)((x_loc,y_loc))
+		return locations.set_dtype(x.dtype)
+    
+	def construct(self, features):
+		coord_features = self.compute_coordinates(features)
+		features=ops.Concat(1)((coordinates_features,features))
+		pred_logits, pred_kernel, pred_scores, iam = self.inst_branch(features)
+		mask_features = self.mask_branch(features)
+
+		N = pred_kernel.shape[1]
+		# mask_features: BxCxHxW
+		B, C, H, W = mask_features.shape
+		pred_masks=ops.BatchMatMul()(pred_kernel,mask_features.view((B,C,H*W))).view((B,N,H,W))
+
+
+		pred_masks=self.resize(pred_masks,scale_factor=self.scale_factor)
+		output = {
+			"pred_logits": pred_logits,
+			"pred_masks": pred_masks,
+			"pred_scores": pred_scores,
+		}
+
+		if self.output_iam:
+			iam=self.resize(iam,scale_factor=self.scale_factor)
+			output['pred_iam'] = iam
+
+		return output
+
+
+
+class GroupInstanceBranch(nn.Cell):
+
+    def __init__(self, cfg, in_channels):
+		super().__init__()
+		# norm = cfg.MODEL.SPARSE_INST.DECODER.NORM
+		dim = cfg.MODEL.SPARSE_INST.DECODER.INST.DIM
+		num_convs = cfg.MODEL.SPARSE_INST.DECODER.INST.CONVS
+		num_masks = cfg.MODEL.SPARSE_INST.DECODER.NUM_MASKS
+		kernel_dim = cfg.MODEL.SPARSE_INST.DECODER.KERNEL_DIM
+		self.num_classes = cfg.MODEL.SPARSE_INST.DECODER.NUM_CLASSES
+		self.num_groups = cfg.MODEL.SPARSE_INST.DECODER.GROUPS
+
+		self.inst_convs = _make_stack_3x3_convs(num_convs, in_channels, dim)
+		# iam prediction, a simple conv
+		expand_dim = dim * self.num_groups
+		self.iam_conv = nn.Conv2d(dim, num_masks * self.num_groups, 3, groups=self.num_groups,has_bias=True)
+
+		 # outputs
+		self.fc = nn.Dense(expand_dim, expand_dim)
+		self.cls_score = nn.Dense(expand_dim, self.num_classes)
+		self.mask_kernel = nn.Dense(expand_dim, kernel_dim)
+		self.objectness = nn.Dense(expand_dim, 1)
+
+
+	def construct(self, features):
+		# instance features (x4 convs)
+		features = self.inst_convs(features)
+		# predict instance activation maps
+		iam = self.iam_conv(features)
+		iam_prob = ops.Sigmoid()(iam)
+
+		B, N = iam_prob.shape[:2]
+		C = features.shape[1]
+		# BxNxHxW -> BxNx(HW)
+		iam_prob = iam_prob.view((B, N, -1))
+		# aggregate features: BxCxHxW -> Bx(HW)xC
+		inst_features=ops.BatchMatMul(transpose_b=True)(iam_prob,features.view((B, C, -1)))
+		normalizer = ops.clip_by_value(iam_prob.sum(-1),clip_value_min=Tensor(1e-6,mindspore.float32))
+		inst_features = inst_features / normalizer[:, :, None]
+
+		inst_features=ops.Reshape()(ops.Transpose()(ops.Reshape()(inst_features,(B,4,N//4,-1)),(0,2,1,3)),(B,N//4,-1))
+		inst_features=ops.ReLU()(self.fc(inst_features))
+		# predict classification & segmentation kernel & objectness
+		pred_logits = self.cls_score(inst_features)
+		pred_kernel = self.mask_kernel(inst_features)
+		pred_scores = self.objectness(inst_features)
+		return pred_logits, pred_kernel, pred_scores, iam
+
+
+
+@SPARSE_INST_DECODER_REGISTRY.register()
+class GroupIAMDecoder(BaseIAMDecoder):
+	def __init__(self, cfg):
+		super().__init__(cfg)
+		in_channels = cfg.MODEL.SPARSE_INST.ENCODER.NUM_CHANNELS + 2
+		self.inst_branch = GroupInstanceBranch(cfg, in_channels)
+
+
+def build_sparse_inst_decoder(cfg):
+	name = cfg.MODEL.SPARSE_INST.DECODER.NAME
+	return SPARSE_INST_DECODER_REGISTRY.get(name)(cfg)
