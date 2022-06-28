@@ -1,7 +1,7 @@
 import mindspore
 import mindspore.nn as nn
 import mindspore.ops as ops
-
+from mindspore import Tensor
 
 from resnet import build_resnet50
 from encoder import InstanceContextEncoder
@@ -19,15 +19,16 @@ class SparseInst(nn.Cell):
 		self.encoder=InstanceContextEncoder(cfg,self.backbone.output_channel())
 		self.decoder=GroupIAMDecoder(cfg)
 
-		self.pixel_mean=
-		self.pixel_std=
+		self.pixel_mean=cfg.MODEL.PIXEL_MEAN
+		self.pixel_std=cfg.MODEL.PIXEL_STD
 
-		self.cls_threshold = cfg.MODEL.SPARSE_INST.CLS_THRESHOLD
+		self.cls_threshold = Tensor(cfg.MODEL.SPARSE_INST.CLS_THRESHOLD)
 		self.mask_threshold = cfg.MODEL.SPARSE_INST.MASK_THRESHOLD
 		self.max_detections = cfg.MODEL.SPARSE_INST.MAX_DETECTIONS
 
 		def normalizer(self, image):
-			image = (image - self.pixel_mean) / self.pixel_std
+			for i in range(image.shape[1]):
+				image[:,i,:,:]=(image[:,i,:,:]=self.pixel_mean[i])/self.pixel_std[i]
 			return image
 
 		def padding(self,image,size_divisibility=32,pad_value=0.0):
