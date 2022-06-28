@@ -28,7 +28,7 @@ class SparseInst(nn.Cell):
 
 		def normalizer(self, image):
 			for i in range(image.shape[1]):
-				image[:,i,:,:]=(image[:,i,:,:]=self.pixel_mean[i])/self.pixel_std[i]
+				image[:,i,:,:]=(image[:,i,:,:]-self.pixel_mean[i])/self.pixel_std[i]
 			return image
 
 		def padding(self,image,size_divisibility=32,pad_value=0.0):

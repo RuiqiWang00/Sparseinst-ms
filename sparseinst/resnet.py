@@ -36,7 +36,7 @@ class ResNet(nn.Cell):
 				norm: Optional[nn.Cell] = None
 				) -> None:
 		super(ResNet, self).__init__()
-		self.output_shape()={}
+		self.output_shape={}
 		if not norm:
 			norm = nn.BatchNorm2d
 		self.norm = norm

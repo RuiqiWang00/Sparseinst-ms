@@ -12,7 +12,7 @@ def _make_stack_3x3_convs(num_convs, in_channels, out_channels):
 		convs.append(
 			Conv2d(in_channels, out_channels, 3, has_bias=True))
 		convs.append(nn.ReLU())
- 		in_channels = out_channels
+		in_channels = out_channels
 	return nn.SequentialCell(*convs)
 
 
@@ -133,7 +133,7 @@ class BaseIAMDecoder(nn.Cell):
 
 class GroupInstanceBranch(nn.Cell):
 
-    def __init__(self, cfg, in_channels):
+	def __init__(self, cfg, in_channels):
 		super().__init__()
 		# norm = cfg.MODEL.SPARSE_INST.DECODER.NORM
 		dim = cfg.MODEL.SPARSE_INST.DECODER.INST.DIM
