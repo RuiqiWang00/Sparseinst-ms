@@ -3,11 +3,7 @@ from mindspore import Tensor
 import mindspore.nn as nn
 import mindspore.ops as ops
 
-
-from detectron2.utils.registry import Registry
-
-SPARSE_INST_ENCODER_REGISTRY = Registry("SPARSE_INST_ENCODER")
-SPARSE_INST_ENCODER_REGISTRY.__doc__ = "registry for SparseInst decoder"
+__all__=["InstanceContextEncoder"]
 
 
 class PyramidPoolingModule(nn.Cell):
@@ -30,7 +26,7 @@ class PyramidPoolingModule(nn.Cell):
 		return out
 
 
-@SPARSE_INST_ENCODER_REGISTRY.register()
+
 class InstanceContextEncoder(nn.Cell):
 	def __init__(self,cfg,input_shape):
 		super().__init__()
@@ -38,7 +34,7 @@ class InstanceContextEncoder(nn.Cell):
 		self.in_features = cfg.MODEL.SPARSE_INST.ENCODER.IN_FEATURES  #[‘res3','res4','res5']
 		# self.norm = cfg.MODEL.SPARSE_INST.ENCODER.NORM
 		# depthwise = cfg.MODEL.SPARSE_INST.ENCODER.DEPTHWISE
-		self.in_channels = [input_shape[f].channels for f in self.in_features]
+		self.in_channels = [input_shape[f] for f in self.in_features]
 		# self.using_bias = self.norm == ""
 		fpn_laterals = []
 		fpn_outputs = []
@@ -56,7 +52,7 @@ class InstanceContextEncoder(nn.Cell):
 		self.fusion = nn.Conv2d(self.num_channels * 3, self.num_channels, 1,has_bias=True)
 
 
-	def construct(self, features):
+	def construct(self, features): #feature:dict
 		features = [features[f] for f in self.in_features]
 		features = features[::-1]
 		prev_features = self.ppm(self.fpn_laterals[0](features[0]))
@@ -78,8 +74,3 @@ class InstanceContextEncoder(nn.Cell):
 
 		features = self.fusion(ops.Concat(axis=1)(features))
 		return features
-
-
-def build_sparse_inst_encoder(cfg, input_shape):
-	name = cfg.MODEL.SPARSE_INST.ENCODER.NAME
-	return SPARSE_INST_ENCODER_REGISTRY.get(name)(cfg, input_shape)

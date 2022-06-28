@@ -3,11 +3,8 @@ from mindspore import Tensor
 import mindspore.nn as nn
 import mindspore.ops as ops
 
-from detectron2.utils.registry import Registry
 
-SPARSE_INST_DECODER_REGISTRY = Registry("SPARSE_INST_DECODER")
-SPARSE_INST_DECODER_REGISTRY.__doc__ = "registry for SparseInst decoder"
-
+__all__=["BaseIAMDecoder","GroupIAMDecoder"]
 
 def _make_stack_3x3_convs(num_convs, in_channels, out_channels):
 	convs = []
@@ -79,7 +76,6 @@ class InstanceBranch(nn.Cell):
 		return pred_logits, pred_kernel, pred_scores, iam
 
 
-@SPARSE_INST_DECODER_REGISTRY.register()
 class BaseIAMDecoder(nn.Cell):
 
 	def __init__(self, cfg):
@@ -185,7 +181,6 @@ class GroupInstanceBranch(nn.Cell):
 
 
 
-@SPARSE_INST_DECODER_REGISTRY.register()
 class GroupIAMDecoder(BaseIAMDecoder):
 	def __init__(self, cfg):
 		super().__init__(cfg)
@@ -193,6 +188,3 @@ class GroupIAMDecoder(BaseIAMDecoder):
 		self.inst_branch = GroupInstanceBranch(cfg, in_channels)
 
 
-def build_sparse_inst_decoder(cfg):
-	name = cfg.MODEL.SPARSE_INST.DECODER.NAME
-	return SPARSE_INST_DECODER_REGISTRY.get(name)(cfg)
